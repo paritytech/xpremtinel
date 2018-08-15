@@ -1,6 +1,6 @@
 #![allow(non_snake_case, non_upper_case_globals)]
 
-extern crate blake2; // needed for Digest impl
+extern crate blake2; // needed for `Digest` impl
 extern crate blake2b_simd;
 extern crate curve25519_dalek;
 extern crate hkdf;
@@ -49,21 +49,29 @@ impl AsRef<[u8]> for Key {
 }
 
 
+#[derive(Debug)]
+pub enum Error {
+    InvalidCapsule
+}
+
+
+#[derive(Clone)]
 pub struct SecretKey {
     scalar: Scalar
 }
 
 impl SecretKey {
     // 3.2.3
-    pub fn decapsulate(&self, cap: &Capsule) -> Option<Key> {
+    pub fn decapsulate(&self, cap: &Capsule) -> Result<Key, Error> {
         if !cap.check() {
-            return None
+            return Err(Error::InvalidCapsule)
         }
-        Some(kdf(((cap.E + cap.V) * &self.scalar).compress().as_bytes()))
+        Ok(kdf(((cap.E + cap.V) * &self.scalar).compress().as_bytes()))
     }
 }
 
 
+#[derive(Clone)]
 pub struct PublicKey {
     point: RistrettoPoint,
     compressed: CompressedRistretto
@@ -85,6 +93,7 @@ impl PublicKey {
 
 
 /// Re-encryption key fragment (cf. section 3.2.2 (6f))
+#[allow(dead_code)]
 pub struct Kfrag {
     id: Scalar,
     rk: Scalar,
@@ -92,6 +101,27 @@ pub struct Kfrag {
     u_1: CompressedRistretto,
     z_1: Scalar,
     z_2: Scalar
+}
+
+impl Kfrag {
+    // 3.2.4 (ReEncapsulate)
+    pub fn re_encapsulate(&self, cap: &Capsule) -> Result<CapsuleFrag, Error> {
+        if !cap.check() {
+            return Err(Error::InvalidCapsule)
+        }
+        let E_1 = cap.E * &self.rk;
+        let V_1 = cap.V * &self.rk;
+        Ok(CapsuleFrag { E_1, V_1, id: self.id, pk_x: self.pk_x.clone() })
+    }
+}
+
+
+// 3.2.4
+pub struct CapsuleFrag {
+    E_1: RistrettoPoint,
+    V_1: RistrettoPoint,
+    id: Scalar,
+    pk_x: PublicKey
 }
 
 
@@ -129,69 +159,134 @@ impl Keypair {
         }
     }
 
-    // 3.2.2 (ReKeyGen)
-    pub fn rekey(&self, pk_b: &PublicKey) -> Kfrag {
-        // 3.2.2 (1):
-        let ephemeral = Keypair::new();
-
-        // 3.2.2 (2):
-        let shared_x_b = (&ephemeral.secret.scalar * &pk_b.point).compress();
-        let d = hash(&[
-            ephemeral.public.compressed.as_bytes(),
-            pk_b.compressed.as_bytes(),
-            shared_x_b.as_bytes()
-        ]);
-
-        // 3.2.2 (3): TODO: t > 1
-        let f_0 = &self.secret.scalar * &d.invert();
-        let f_1 = Scalar::random(&mut thread_rng());
-
-        // 3.2.2 (4):
-        let f = |x: &Scalar| f_0 + f_1 * x; // TODO: t > 1
-
-        // 3.2.2 (5):
-        let shared_a_b = (&self.secret.scalar * &pk_b.point).compress();
-        let D = hash(&[
-            self.public.compressed.as_bytes(),
-            pk_b.compressed.as_bytes(),
-            shared_a_b.as_bytes()
-        ]);
-
-        // 3.2.2 (6a)
-        let id = Scalar::random(&mut thread_rng());
-        let y  = Scalar::random(&mut thread_rng());
-
-        // 3.2.2 (6b)
-        let sk = hash(&[id.as_bytes(), D.as_bytes()]);
-        let Y = (&g * &y).compress();
-
-        // 3.2.2 (6c):
-        let rk = f(&sk);
-
-        // 3.2.2 (6d):
-        let U_1 = (&rk * &*U).compress();
-
-        // 3.2.2 (6e):
-        let z_1 = hash(&[
-            Y.as_bytes(),
-            id.as_bytes(),
-            self.public.compressed.as_bytes(),
-            pk_b.compressed.as_bytes(),
-            U_1.as_bytes(),
-            ephemeral.public.compressed.as_bytes()
-        ]);
-
-        let z_2 = y - self.secret.scalar * z_1;
-
-        Kfrag { id, rk, pk_x: ephemeral.public, u_1: U_1, z_1, z_2 }
-    }
-
     pub fn public(&self) -> &PublicKey {
         &self.public
     }
 
     pub fn secret(&self) -> &SecretKey {
         &self.secret
+    }
+
+    // 3.2.2 (ReKeyGen)
+    pub fn rekey(&self, pk_b: &PublicKey, n: usize, t: usize) -> Vec<Kfrag> {
+        assert!(t >  0);
+        assert!(n >= t);
+
+        // 3.2.2 (1):
+        let ephemeral = Keypair::new(); // (x_a, X_a)
+
+        // 3.2.2 (2):
+        let d = hash(&[
+            ephemeral.public.compressed.as_bytes(),
+            pk_b.compressed.as_bytes(),
+            (&pk_b.point * &ephemeral.secret.scalar).compress().as_bytes()
+        ]);
+
+        // 3.2.2 (3 & 4):
+        let f = |mut x: Scalar| {
+            let mut y = self.secret.scalar * d.invert(); // f_0
+            for _ in 0 .. t - 1 {
+                let f_i = Scalar::random(&mut thread_rng()); // (3)
+                y += f_i * x;
+                x *= x
+            }
+            y
+        };
+
+        // 3.2.2 (5):
+        let D = hash(&[
+            self.public.compressed.as_bytes(),
+            pk_b.compressed.as_bytes(),
+            (pk_b.point * &self.secret.scalar).compress().as_bytes()
+        ]);
+
+        // 3.2.2 (6a)
+        let mut KF = Vec::with_capacity(n);
+        for _ in 0 .. n {
+            let id = Scalar::random(&mut thread_rng());
+            let y  = Scalar::random(&mut thread_rng());
+
+            // 3.2.2 (6b)
+            let sx = hash(&[id.as_bytes(), D.as_bytes()]);
+            let Y = (&g * &y).compress();
+
+            // 3.2.2 (6c):
+            let rk = f(sx);
+
+            // 3.2.2 (6d):
+            let U_1 = (&*U * &rk).compress();
+
+            // 3.2.2 (6e):
+            let z_1 = hash(&[
+                Y.as_bytes(),
+                id.as_bytes(),
+                self.public.compressed.as_bytes(),
+                pk_b.compressed.as_bytes(),
+                U_1.as_bytes(),
+                ephemeral.public.compressed.as_bytes()
+            ]);
+
+            let z_2 = y - self.secret.scalar * z_1;
+
+            KF.push(Kfrag { id, rk, pk_x: ephemeral.public.clone(), u_1: U_1, z_1, z_2 })
+        }
+        KF
+    }
+
+    // 3.2.4 (DecapsulateFrags)
+    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cfrags: &[CapsuleFrag]) -> Key {
+        // 3.2.4 (1):
+        let D = hash(&[
+            pk_a.compressed.as_bytes(),
+            self.public.compressed.as_bytes(),
+            (pk_a.point * &self.secret.scalar).compress().as_bytes()
+        ]);
+
+        // 3.2.4 (2):
+        let mut S = Vec::with_capacity(cfrags.len());
+        for cfrag_i in cfrags {
+            let sx_i = hash(&[cfrag_i.id.as_bytes(), D.as_bytes()]);
+            S.push(sx_i);
+        }
+        let L: Vec<Scalar> = S.iter()
+            .enumerate()
+            .fold(Vec::with_capacity(cfrags.len()), |mut L, (i, sx_i)| {
+                let lam_i_s = S.iter()
+                    .enumerate()
+                    .filter_map(|(j, sx_j)| {
+                        if i != j { Some(sx_j) } else { None }
+                    })
+                    .map(|sx_j| {
+                        sx_j.invert() * (sx_j - sx_i)
+                    })
+                    .product();
+                L.push(lam_i_s);
+                L
+            });
+
+        // 3.2.4 (3):
+        let E_prime: RistrettoPoint =
+            cfrags.iter().zip(L.iter())
+                .map(|(cfrag_i, lam_i_s)| cfrag_i.E_1 * lam_i_s)
+                .sum(); // cf. 2.1 and RFC 6090 (App. E)
+
+        let V_prime: RistrettoPoint =
+            cfrags.iter().zip(L.iter())
+                .map(|(cfrag_i, lam_i_s)| cfrag_i.V_1 * lam_i_s)
+                .sum(); // cf. 2.1 and RFC 6090 (App. E)
+
+        // 3.2.4 (4):
+        let d = {
+            let X_a = &cfrags[0].pk_x; // all fragments share the same ephemeral public key
+            hash(&[
+                X_a.compressed.as_bytes(),
+                self.public.compressed.as_bytes(),
+                (X_a.point * &self.secret.scalar).compress().as_bytes()
+            ])
+        };
+
+        // 3.2.4 (5):
+        kdf(((E_prime + V_prime) * &d).compress().as_bytes()) // cf. 2.1 and RFC 6090 (App. E)
     }
 }
 
@@ -213,5 +308,4 @@ fn kdf(input: &[u8]) -> Key {
     let kdf = hkdf::Hkdf::<blake2::Blake2b>::extract(None, input);
     Key(kdf.expand(b"pre", 64))
 }
-
 
