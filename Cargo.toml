@@ -1,0 +1,16 @@
+[package]
+name = "pre"
+version = "0.1.0"
+authors = ["Toralf Wittner <tw@dtex.org>"]
+
+[dependencies]
+blake2 = "0.7" # remove when an impl for Digest is provided for blake2b_simd
+blake2b_simd = "0.2"
+curve25519-dalek = { version = "0.19", features = ["avx2_backend"] }
+hkdf = "0.5"
+lazy_static = "1.1"
+rand = "0.5"
+subtle = "0.7"
+
+[dev-dependencies]
+rand = "0.5"
