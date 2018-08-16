@@ -21,15 +21,15 @@ fn rekey() -> Result<(), pre::Error> {
     let alice = pre::Keypair::new();
     let bob = pre::Keypair::new();
 
-    let (k_1, cap) = alice.public().encapsulate();
+    let (k, cap) = alice.public().encapsulate();
     let kfrags = alice.rekey(bob.public(), 3, 2);
     let mut cfrags = Vec::with_capacity(kfrags.len());
     for kfrag_i in kfrags {
         cfrags.push(kfrag_i.re_encapsulate(&cap)?)
     }
-    let k_2 = bob.decapsulate_frags(alice.public(), &cfrags);
-
-    assert_eq!(k_1, k_2);
+    assert_eq!(k, bob.decapsulate_frags(alice.public(), &[&cfrags[0], &cfrags[1]]));
+    assert_eq!(k, bob.decapsulate_frags(alice.public(), &[&cfrags[0], &cfrags[2]]));
+    assert_eq!(k, bob.decapsulate_frags(alice.public(), &[&cfrags[1], &cfrags[2]]));
     Ok(())
 }
 

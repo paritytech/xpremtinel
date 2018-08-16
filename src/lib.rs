@@ -243,7 +243,7 @@ impl Keypair {
     }
 
     // 3.2.4 (DecapsulateFrags)
-    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cfrags: &[CapsuleFrag]) -> Key {
+    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cfrags: &[&CapsuleFrag]) -> Key {
         // 3.2.4 (1):
         let D = hash(&[
             pk_a.compressed.as_bytes(),
@@ -257,6 +257,7 @@ impl Keypair {
             let sx_i = hash(&[cfrag_i.id.as_bytes(), D.as_bytes()]);
             S.push(sx_i);
         }
+
         let L: Vec<Scalar> = S.iter()
             .enumerate()
             .fold(Vec::with_capacity(cfrags.len()), |mut L, (i, sx_i)| {
