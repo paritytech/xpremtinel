@@ -1,3 +1,74 @@
+//! Implementation of "Umbral" \[1\], a threshold proxy re-encryption scheme.
+//!
+//! Alice and Bob are represented by their keypairs (a, g^a) and (b, g^b). Alice wishes
+//! Bob to be able to decrypt messages encrypted for her, but does not want to distribute
+//! extra keys to enable this. Instead, entities which encrypt messages using Alice's
+//! public key g^a, create a symmetric encryption key:
+//!
+//!     k = kdf((g^a)^(r+u)) // with r and u being random scalars mod group order
+//!
+//! as well as a key "capsule":
+//!
+//!     c = (g^r, g^r, u + r * hash(g^u, g^r))
+//!
+//! Note that k and c can be created without Alice's involvement, requiring only her
+//! public key. The capsule c is put as associated data into the AEAD encrypted message
+//! which uses k for encryption.
+//!
+//! Alice herself can de-encapsulate k given c with her private key a
+//!
+//!     k = kdf((g^r * g^u)^a)
+//!       = kdf((g^(r+u))^a)
+//!       = kdf((g^a)^(r+u))
+//!
+//! Given Bob's public key g^b, Alice can also create a re-encryption key.
+//!
+//!     let (x, g^x) be an ephemeral keypair;
+//!         d = hash(g^x, g^b, (g^b)^x) // Diffie-Hellman exchange
+//!         rk = a / d
+//!     in
+//!         (g^x, rk) // the re-encryption key bundle
+//!
+//! Alice can then send the re-encryption key bundle to a third party (the "proxy"), which has
+//! access to Alice's encrypted messages, and inform it to give Bob decryption rights over her
+//! messages.
+//!
+//! On incoming messages, the proxy extracts the capsule c and uses the re-encryption key bundle
+//! to compute:
+//!
+//!     cf = ((g^r)^rk, (g^u)^rk, g^x)
+//!
+//! which it hands over to Bob together with the encrypted message (without c).
+//! Bob, using his secret key b and cf, derives k as follows:
+//!
+//!     d = hash(g^x, g^b, (g^x)^b)
+//!     k = kdf(((g^r)^rk * (g^u)^rk)^d)
+//!       = kdf(((g^r)^(a/d) * (g^u)^(a/d))^d)
+//!       = kdf(((g^r)^((a/d)*d) * (g^u)^((a/d)*d)))
+//!       = kdf(((g^r)^a * (g^u)^a))
+//!       = kdf(((g^a)^r * (g^a)^u))
+//!       = kdf(((g^a)^(r+u)))
+//!
+//! The Umbral scheme extends this basic approach by applying Shamir's secret sharing technique
+//! to the re-encryption key, which is split into fragments, requiring a threshold number of
+//! fragments in order to reconstruct the secret.
+//!
+//! Implementation note
+//! -------------------
+//!
+//! This library uses the excellent `dalek_curve25519` \[2\] crate to implement elliptic curve
+//! operations. In particular, `dalek_curve25519` implements the ristretto technique \[3\],
+//! which constructs prime order elliptic curve groups with non-malleable encodings, in order
+//! to provide a prime order group based on Curve25519.
+//!
+//! --------------------------------------------------------------------------------------
+//! \[1\]: David Nuñez: "Umbral: A threshold proxy re-encryption scheme",
+//!        https://github.com/nucypher/umbral-doc
+//!
+//! \[2\]: https://github.com/dalek-cryptography/curve25519-dalek
+//!
+//! \[3\]: https://ristretto.group
+
 #![allow(non_snake_case, non_upper_case_globals)]
 
 extern crate blake2; // needed for `Digest` impl
@@ -17,11 +88,6 @@ use curve25519_dalek::{
 };
 use rand::prelude::*;
 use subtle::ConstantTimeEq;
-
-
-// Note: Ristretto is a technique for constructing prime order elliptic curve groups with
-// non-malleable encodings. See https://ristretto.group for details. `curve25519_dalek`
-// provides a ristretto implementation for Curve25519.
 
 
 // Generator element `g` (cf. section 3.2.1).
@@ -194,7 +260,7 @@ impl Keypair {
 
         // 3.2.2 (3 & 4):
         let f = |mut x: Scalar| {
-            let mut y = self.secret.scalar * d.invert(); // f_0
+            let mut y = self.secret.scalar * d.invert(); // f_0 (the secret to share)
             for _ in 0 .. t - 1 {
                 let f_i = Scalar::random(&mut thread_rng()); // (3)
                 y += f_i * x;
