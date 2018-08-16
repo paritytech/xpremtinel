@@ -60,6 +60,7 @@ impl AsRef<[u8]> for Key {
 
 #[derive(Debug)]
 pub enum Error {
+    Empty,
     InvalidCapsule
 }
 
@@ -243,7 +244,10 @@ impl Keypair {
     }
 
     // 3.2.4 (DecapsulateFrags)
-    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cfrags: &[&CapsuleFrag]) -> Key {
+    pub fn decapsulate_frags<'a, I>(&self, pk_a: &PublicKey, cfrags: I) -> Result<Key, Error>
+    where
+        I: IntoIterator<Item=&'a CapsuleFrag> + Copy
+    {
         // 3.2.4 (1):
         let D = hash(&[
             pk_a.compressed.as_bytes(),
@@ -252,7 +256,7 @@ impl Keypair {
         ]);
 
         // 3.2.4 (2):
-        let mut S = Vec::with_capacity(cfrags.len());
+        let mut S = Vec::new();
         for cfrag_i in cfrags {
             let sx_i = hash(&[cfrag_i.id.as_bytes(), D.as_bytes()]);
             S.push(sx_i);
@@ -260,7 +264,7 @@ impl Keypair {
 
         let L: Vec<Scalar> = S.iter()
             .enumerate()
-            .fold(Vec::with_capacity(cfrags.len()), |mut L, (i, sx_i)| {
+            .fold(Vec::with_capacity(S.len()), |mut L, (i, sx_i)| {
                 let lam_i_s = S.iter()
                     .enumerate()
                     .filter_map(|(j, sx_j)| {
@@ -277,27 +281,28 @@ impl Keypair {
 
         // 3.2.4 (3):
         let E_prime: RistrettoPoint =
-            cfrags.iter().zip(L.iter())
+            cfrags.into_iter().zip(L.iter())
                 .map(|(cfrag_i, lam_i_s)| cfrag_i.E_1 * lam_i_s)
                 .sum(); // cf. 2.1 and RFC 6090 (App. E)
 
         let V_prime: RistrettoPoint =
-            cfrags.iter().zip(L.iter())
+            cfrags.into_iter().zip(L.iter())
                 .map(|(cfrag_i, lam_i_s)| cfrag_i.V_1 * lam_i_s)
                 .sum(); // cf. 2.1 and RFC 6090 (App. E)
 
         // 3.2.4 (4):
         let d = {
-            let X_a = &cfrags[0].pk_x; // all fragments share the same ephemeral public key
+            // all fragments share the same ephemeral public key:
+            let cfrag = cfrags.into_iter().next().ok_or(Error::Empty)?;
             hash(&[
-                X_a.compressed.as_bytes(),
+                cfrag.pk_x.compressed.as_bytes(),
                 self.public.compressed.as_bytes(),
-                (X_a.point * &self.secret.scalar).compress().as_bytes()
+                (cfrag.pk_x.point * &self.secret.scalar).compress().as_bytes()
             ])
         };
 
         // 3.2.4 (5):
-        kdf(((E_prime + V_prime) * &d).compress().as_bytes()) // cf. 2.1 and RFC 6090 (App. E)
+        Ok(kdf(((E_prime + V_prime) * &d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
     }
 }
 
