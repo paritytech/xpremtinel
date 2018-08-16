@@ -19,26 +19,35 @@ use rand::prelude::*;
 use subtle::ConstantTimeEq;
 
 
-// Generator element g (cf. section 3.2.1).
+// Note: Ristretto is a technique for constructing prime order elliptic curve groups with
+// non-malleable encodings. See https://ristretto.group for details. `curve25519_dalek`
+// provides a ristretto implementation for Curve25519.
+
+
+// Generator element `g` (cf. section 3.2.1).
 const g: RistrettoBasepointTable = constants::RISTRETTO_BASEPOINT_TABLE;
 
-// Generator element U in compressed form (cf. section 3.2.1).
-const U_COMPRESSED: CompressedRistretto =
-    CompressedRistretto(
-        [0x0C,0xAF,0x94,0xD5,0x1E,0x45,0xBA,0x71,0xE5,0x61,0xF6,0x58,0x61,0x05,0x82,0x93,
-         0xE9,0xE2,0x8F,0x80,0xE8,0x0B,0x83,0x53,0x64,0x40,0xC0,0xD3,0xF0,0x52,0x99,0x61]
-    );
-
 lazy_static! {
-    // Generator element U (as basepoint table to speed up scalar multiplication)
+    // Generator element `U` (cf. section 3.2.1).
     static ref U: RistrettoBasepointTable = {
-        let basepoint = U_COMPRESSED.decompress().unwrap();
+        // Fix some random basepoint as `U`.
+        // (For elliptic curves with prime order, every element is a generator.)
+        let basepoint =
+            CompressedRistretto([
+                0x0C, 0xAF, 0x94, 0xD5, 0x1E, 0x45, 0xBA, 0x71,
+                0xE5, 0x61, 0xF6, 0x58, 0x61, 0x05, 0x82, 0x93,
+                0xE9, 0xE2, 0x8F, 0x80, 0xE8, 0x0B, 0x83, 0x53,
+                0x64, 0x40, 0xC0, 0xD3, 0xF0, 0x52, 0x99, 0x61
+            ])
+            .decompress()
+            .expect("valid ristretto point");
+        // Create a basepoint table to speed up scalar multiplication:
         RistrettoBasepointTable::create(&basepoint)
     };
 }
 
 
-// Symmetric key K
+// Symmetric encryption/decryption key `K`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Key(Vec<u8>);
 
@@ -74,7 +83,7 @@ impl SecretKey {
 #[derive(Clone)]
 pub struct PublicKey {
     point: RistrettoPoint,
-    compressed: CompressedRistretto
+    compressed: CompressedRistretto // `point` in compressed form
 }
 
 impl PublicKey {
@@ -85,7 +94,7 @@ impl PublicKey {
         let E = &g * &r;
         let V = &g * &u;
         let s = u + r * hash(&[E.compress().as_bytes(), V.compress().as_bytes()]);
-        let k = kdf((&self.point * &(r + u)).compress().as_bytes());
+        let k = kdf((self.point * &(r + u)).compress().as_bytes());
         let c = Capsule { E, V, s };
         (k, c)
     }
@@ -137,7 +146,7 @@ impl Capsule {
     pub fn check(&self) -> bool {
         let expected = &g * &self.s;
         let h = hash(&[self.E.compress().as_bytes(), self.V.compress().as_bytes()]);
-        expected.ct_eq(&(&self.V + &(self.E * &h))).unwrap_u8() == 1 // cf. 2.1 and RFC 6090 (App. E)
+        expected.ct_eq(&(self.V + self.E * &h)).unwrap_u8() == 1 // cf. 2.1 and RFC 6090 (App. E)
     }
 }
 
@@ -179,7 +188,7 @@ impl Keypair {
         let d = hash(&[
             ephemeral.public.compressed.as_bytes(),
             pk_b.compressed.as_bytes(),
-            (&pk_b.point * &ephemeral.secret.scalar).compress().as_bytes()
+            (pk_b.point * &ephemeral.secret.scalar).compress().as_bytes()
         ]);
 
         // 3.2.2 (3 & 4):
@@ -254,10 +263,11 @@ impl Keypair {
                 let lam_i_s = S.iter()
                     .enumerate()
                     .filter_map(|(j, sx_j)| {
-                        if i != j { Some(sx_j) } else { None }
-                    })
-                    .map(|sx_j| {
-                        sx_j.invert() * (sx_j - sx_i)
+                        if i != j {
+                            Some(sx_j.invert() * (sx_j - sx_i))
+                        } else {
+                            None
+                        }
                     })
                     .product();
                 L.push(lam_i_s);

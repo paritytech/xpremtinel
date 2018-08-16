@@ -31,5 +31,5 @@ fn rekey() -> Result<(), pre::Error> {
 
     assert_eq!(k_1, k_2);
     Ok(())
-
 }
+
