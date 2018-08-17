@@ -5,11 +5,15 @@
 //! extra keys to enable this. Instead, entities which encrypt messages using Alice's
 //! public key g^a, create a symmetric encryption key:
 //!
+//! ```text
 //!     k = kdf((g^a)^(r+u)) // with r and u being random scalars mod group order
+//! ```
 //!
 //! as well as a key "capsule":
 //!
+//! ```text
 //!     c = (g^r, g^r, u + r * hash(g^u, g^r))
+//! ```
 //!
 //! Note that k and c can be created without Alice's involvement, requiring only her
 //! public key. The capsule c is put as associated data into the AEAD encrypted message
@@ -17,17 +21,20 @@
 //!
 //! Alice herself can de-encapsulate k given c with her private key a
 //!
+//! ```text
 //!     k = kdf((g^r * g^u)^a)
 //!       = kdf((g^(r+u))^a)
 //!       = kdf((g^a)^(r+u))
+//! ```
 //!
 //! Given Bob's public key g^b, Alice can also create a re-encryption key.
 //!
+//! ```text
 //!     let (x, g^x) be an ephemeral keypair;
-//!         d = hash(g^x, g^b, (g^b)^x) // Diffie-Hellman exchange
-//!         rk = a / d
-//!     in
-//!         (g^x, rk) // the re-encryption key bundle
+//!     d = hash(g^x, g^b, (g^b)^x) // Diffie-Hellman exchange
+//!     rk = a / d
+//!     (g^x, rk) // the re-encryption key bundle
+//! ```
 //!
 //! Alice can then send the re-encryption key bundle to a third party (the "proxy"), which has
 //! access to Alice's encrypted messages, and inform it to give Bob decryption rights over her
@@ -36,11 +43,14 @@
 //! On incoming messages, the proxy extracts the capsule c and uses the re-encryption key bundle
 //! to compute:
 //!
+//! ```text
 //!     cf = ((g^r)^rk, (g^u)^rk, g^x)
+//! ```
 //!
 //! which it hands over to Bob together with the encrypted message (without c).
 //! Bob, using his secret key b and cf, derives k as follows:
 //!
+//! ```text
 //!     d = hash(g^x, g^b, (g^x)^b)
 //!     k = kdf(((g^r)^rk * (g^u)^rk)^d)
 //!       = kdf(((g^r)^(a/d) * (g^u)^(a/d))^d)
@@ -48,6 +58,7 @@
 //!       = kdf(((g^r)^a * (g^u)^a))
 //!       = kdf(((g^a)^r * (g^a)^u))
 //!       = kdf(((g^a)^(r+u)))
+//! ```
 //!
 //! The Umbral scheme extends this basic approach by applying Shamir's secret sharing technique
 //! to the re-encryption key, which is split into fragments, requiring a threshold number of
@@ -193,6 +204,7 @@ impl Kfrag {
 
 
 // 3.2.4
+#[derive(Clone)]
 pub struct CapsuleFrag {
     E_1: RistrettoPoint,
     V_1: RistrettoPoint,
@@ -264,9 +276,11 @@ impl Keypair {
             coeff.push(Scalar::random(&mut thread_rng()))
         }
 
+        let f_0 = self.secret.scalar * d.invert(); // the secret to share
+
         // 3.2.2 (4):
         let f = |mut x: Scalar| {
-            let mut y = self.secret.scalar * d.invert(); // f_0 (the secret to share)
+            let mut y = f_0;
             for i in 0 .. t - 1 {
                 y += coeff[i] * x;
                 x *= x
@@ -315,10 +329,11 @@ impl Keypair {
     }
 
     // 3.2.4 (DecapsulateFrags)
-    pub fn decapsulate_frags<'a, I>(&self, pk_a: &PublicKey, cfrags: I) -> Result<Key, Error>
-    where
-        I: IntoIterator<Item=&'a CapsuleFrag> + Copy
-    {
+    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cfrags: &[CapsuleFrag]) -> Result<Key, Error> {
+        if cfrags.is_empty() {
+            return Err(Error::Empty)
+        }
+
         // 3.2.4 (1):
         let D = hash(&[
             pk_a.compressed.as_bytes(),
@@ -333,38 +348,13 @@ impl Keypair {
             S.push(sx_i);
         }
 
-        let L: Vec<Scalar> = S.iter()
-            .enumerate()
-            .fold(Vec::with_capacity(S.len()), |mut L, (i, sx_i)| {
-                let lam_i_s = S.iter()
-                    .enumerate()
-                    .filter_map(|(j, sx_j)| {
-                        if i != j {
-                            Some(sx_j.invert() * (sx_j - sx_i))
-                        } else {
-                            None
-                        }
-                    })
-                    .product();
-                L.push(lam_i_s);
-                L
-            });
-
         // 3.2.4 (3):
-        let E_prime: RistrettoPoint =
-            cfrags.into_iter().zip(L.iter())
-                .map(|(cfrag_i, lam_i_s)| cfrag_i.E_1 * lam_i_s)
-                .sum(); // cf. 2.1 and RFC 6090 (App. E)
-
-        let V_prime: RistrettoPoint =
-            cfrags.into_iter().zip(L.iter())
-                .map(|(cfrag_i, lam_i_s)| cfrag_i.V_1 * lam_i_s)
-                .sum(); // cf. 2.1 and RFC 6090 (App. E)
+        let mut cfrags = cfrags.to_vec();
+        let (E_prime, V_prime) = interpol(&S, &mut cfrags);
 
         // 3.2.4 (4):
         let d = {
-            // all fragments share the same ephemeral public key:
-            let cfrag = cfrags.into_iter().next().ok_or(Error::Empty)?;
+            let cfrag = &cfrags[0]; // all fragments share the same ephemeral public key:
             hash(&[
                 cfrag.pk_x.compressed.as_bytes(),
                 self.public.compressed.as_bytes(),
@@ -394,5 +384,20 @@ fn hash(inputs: &[&[u8]]) -> Scalar {
 fn kdf(input: &[u8]) -> Key {
     let kdf = hkdf::Hkdf::<blake2::Blake2b>::extract(None, input);
     Key(kdf.expand(b"pre", 64))
+}
+
+// https://en.wikipedia.org/wiki/Neville%27s_algorithm
+fn interpol(sx: &[Scalar], cfs: &mut Vec<CapsuleFrag>) -> (RistrettoPoint, RistrettoPoint) {
+    for d in 1 .. sx.len() {
+        for i in 0 .. sx.len() - d {
+            let j = i + d;
+            let num_e = sx[j] * cfs[i].E_1 - sx[i] * cfs[i + 1].E_1;
+            let num_v = sx[j] * cfs[i].V_1 - sx[i] * cfs[i + 1].V_1;
+            let den = (sx[j] - sx[i]).invert();
+            cfs[i].E_1 = num_e * den;
+            cfs[i].V_1 = num_v * den;
+        }
+    }
+    (cfs[0].E_1, cfs[0].V_1)
 }
 
