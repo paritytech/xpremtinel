@@ -258,12 +258,17 @@ impl Keypair {
             (pk_b.point * &ephemeral.secret.scalar).compress().as_bytes()
         ]);
 
-        // 3.2.2 (3 & 4):
+        // 3.2.2 (3):
+        let mut coeff = Vec::with_capacity(t - 1);
+        for _ in 0 .. t - 1 {
+            coeff.push(Scalar::random(&mut thread_rng()))
+        }
+
+        // 3.2.2 (4):
         let f = |mut x: Scalar| {
             let mut y = self.secret.scalar * d.invert(); // f_0 (the secret to share)
-            for _ in 0 .. t - 1 {
-                let f_i = Scalar::random(&mut thread_rng()); // (3)
-                y += f_i * x;
+            for i in 0 .. t - 1 {
+                y += coeff[i] * x;
                 x *= x
             }
             y
