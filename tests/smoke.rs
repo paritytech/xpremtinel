@@ -16,13 +16,12 @@ fn encapsulate_decapsulate() -> Result<(), pre::Error> {
     Ok(())
 }
 
-#[test]
-fn rekey_1_1() -> Result<(), pre::Error> {
+fn rekey_n_t(n: usize, t: usize) -> Result<(), pre::Error> {
     let alice = pre::Keypair::new();
     let bob = pre::Keypair::new();
 
     let (k, cap) = alice.public().encapsulate();
-    let kfrags = alice.rekey(bob.public(), 1, 1);
+    let kfrags = alice.rekey(bob.public(), n, t);
     let mut cfrags = Vec::with_capacity(kfrags.len());
     for kfrag_i in kfrags {
         cfrags.push(kfrag_i.re_encapsulate(&cap)?)
@@ -32,17 +31,17 @@ fn rekey_1_1() -> Result<(), pre::Error> {
 }
 
 #[test]
-fn rekey_2_2() -> Result<(), pre::Error> {
-    let alice = pre::Keypair::new();
-    let bob = pre::Keypair::new();
-
-    let (k, cap) = alice.public().encapsulate();
-    let kfrags = alice.rekey(bob.public(), 2, 2);
-    let mut cfrags = Vec::with_capacity(kfrags.len());
-    for kfrag_i in kfrags {
-        cfrags.push(kfrag_i.re_encapsulate(&cap)?)
-    }
-    assert_eq!(k, bob.decapsulate_frags(alice.public(), &cfrags)?);
+fn rekey() -> Result<(), pre::Error> {
+    rekey_n_t(1, 1)?;
+    rekey_n_t(2, 2)?;
+    rekey_n_t(3, 3)?;
+    rekey_n_t(4, 4)?;
+    rekey_n_t(2, 1)?;
+    rekey_n_t(3, 1)?;
+    rekey_n_t(4, 1)?;
+    rekey_n_t(3, 2)?;
+    rekey_n_t(4, 2)?;
+    rekey_n_t(4, 3)?;
     Ok(())
 }
 
