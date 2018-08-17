@@ -349,8 +349,26 @@ impl Keypair {
         }
 
         // 3.2.4 (3):
-        let mut cfrags = cfrags.to_vec();
-        let (E_prime, V_prime) = interpol(&S, &mut cfrags);
+        let mut num_e = Vec::new();
+        let mut num_v = Vec::new();
+        let mut den = Vec::new();
+        for i in 0 .. S.len() {
+            let (n, d) = S.iter()
+                .enumerate()
+                .filter_map(|(j, s)| {
+                    if i != j { Some((s, s - S[i])) } else { None }
+                })
+                .fold((Scalar::one(), Scalar::one()), |(n1, d1), (n2, d2)| (n1 * n2, d1 * d2));
+            num_e.push(cfrags[i].E_1 * n);
+            num_v.push(cfrags[i].V_1 * n);
+            den.push(d);
+        }
+        let mut E_prime = num_e[0] * den[0].invert();
+        let mut V_prime = num_v[0] * den[0].invert();
+        for i in 1 .. S.len() {
+            E_prime += num_e[i] * den[i].invert();
+            V_prime += num_v[i] * den[i].invert();
+        }
 
         // 3.2.4 (4):
         let d = {
@@ -384,20 +402,5 @@ fn hash(inputs: &[&[u8]]) -> Scalar {
 fn kdf(input: &[u8]) -> Key {
     let kdf = hkdf::Hkdf::<blake2::Blake2b>::extract(None, input);
     Key(kdf.expand(b"pre", 64))
-}
-
-// https://en.wikipedia.org/wiki/Neville%27s_algorithm
-fn interpol(sx: &[Scalar], cfs: &mut Vec<CapsuleFrag>) -> (RistrettoPoint, RistrettoPoint) {
-    for d in 1 .. sx.len() {
-        for i in 0 .. sx.len() - d {
-            let j = i + d;
-            let num_e = sx[j] * cfs[i].E_1 - sx[i] * cfs[i + 1].E_1;
-            let num_v = sx[j] * cfs[i].V_1 - sx[i] * cfs[i + 1].V_1;
-            let den = (sx[j] - sx[i]).invert();
-            cfs[i].E_1 = num_e * den;
-            cfs[i].V_1 = num_v * den;
-        }
-    }
-    (cfs[0].E_1, cfs[0].V_1)
 }
 
