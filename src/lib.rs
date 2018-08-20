@@ -6,13 +6,13 @@
 //! public key g^a, create a symmetric encryption key:
 //!
 //! ```text
-//!     k = kdf((g^a)^(r+u)) // with r and u being random scalars mod group order
+//! k = kdf((g^a)^(r+u)) // with r and u being random scalars mod group order
 //! ```
 //!
 //! as well as a key "capsule":
 //!
 //! ```text
-//!     c = (g^r, g^r, u + r * hash(g^u, g^r))
+//! c = (g^r, g^r, u + r * hash(g^u, g^r))
 //! ```
 //!
 //! Note that k and c can be created without Alice's involvement, requiring only her
@@ -22,18 +22,18 @@
 //! Alice herself can de-encapsulate k given c with her private key a
 //!
 //! ```text
-//!     k = kdf((g^r * g^u)^a)
-//!       = kdf((g^(r+u))^a)
-//!       = kdf((g^a)^(r+u))
+//! k = kdf((g^r * g^u)^a)
+//!   = kdf((g^(r+u))^a)
+//!   = kdf((g^a)^(r+u))
 //! ```
 //!
 //! Given Bob's public key g^b, Alice can also create a re-encryption key.
 //!
 //! ```text
-//!     let (x, g^x) be an ephemeral keypair;
-//!     d = hash(g^x, g^b, (g^b)^x) // Diffie-Hellman exchange
-//!     rk = a / d
-//!     (g^x, rk) // the re-encryption key bundle
+//! let (x, g^x) be an ephemeral keypair;
+//! d = hash(g^x, g^b, (g^b)^x) // Diffie-Hellman exchange
+//! rk = a / d
+//! (g^x, rk) // the re-encryption key bundle
 //! ```
 //!
 //! Alice can then send the re-encryption key bundle to a third party (the "proxy"), which has
@@ -44,25 +44,27 @@
 //! to compute:
 //!
 //! ```text
-//!     cf = ((g^r)^rk, (g^u)^rk, g^x)
+//! cf = ((g^r)^rk, (g^u)^rk, g^x)
 //! ```
 //!
 //! which it hands over to Bob together with the encrypted message (without c).
 //! Bob, using his secret key b and cf, derives k as follows:
 //!
 //! ```text
-//!     d = hash(g^x, g^b, (g^x)^b)
-//!     k = kdf(((g^r)^rk * (g^u)^rk)^d)
-//!       = kdf(((g^r)^(a/d) * (g^u)^(a/d))^d)
-//!       = kdf(((g^r)^((a/d)*d) * (g^u)^((a/d)*d)))
-//!       = kdf(((g^r)^a * (g^u)^a))
-//!       = kdf(((g^a)^r * (g^a)^u))
-//!       = kdf(((g^a)^(r+u)))
+//! d = hash(g^x, g^b, (g^x)^b)
+//! k = kdf(((g^r)^rk * (g^u)^rk)^d)
+//!   = kdf(((g^r)^(a/d) * (g^u)^(a/d))^d)
+//!   = kdf(((g^r)^((a/d)*d) * (g^u)^((a/d)*d)))
+//!   = kdf(((g^r)^a * (g^u)^a))
+//!   = kdf(((g^a)^r * (g^a)^u))
+//!   = kdf(((g^a)^(r+u)))
 //! ```
 //!
-//! The Umbral scheme extends this basic approach by applying Shamir's secret sharing technique
-//! to the re-encryption key, which is split into fragments, requiring a threshold number of
-//! fragments in order to reconstruct the secret.
+//! Obviously it would be trivial for the proxy and Bob to join forces and recover Alice's secret
+//! key a. Therefore, the Umbral scheme extends the basic approach by applying Shamir's secret
+//! sharing technique to the re-encryption key, which is split into fragments, requiring a
+//! threshold number of fragments in order to reconstruct the secret. This then requires at least
+//! t proxies and Bob to collaborate in order to recover Alice's secret.
 //!
 //! Implementation note
 //! -------------------
@@ -349,25 +351,23 @@ impl Keypair {
         }
 
         // 3.2.4 (3):
-        let mut num_e = Vec::new();
-        let mut num_v = Vec::new();
-        let mut den = Vec::new();
+        let mut numer = Vec::new();
+        let mut denum = Vec::new();
         for i in 0 .. S.len() {
             let (n, d) = S.iter()
                 .enumerate()
-                .filter_map(|(j, s)| {
-                    if i != j { Some((s, s - S[i])) } else { None }
-                })
-                .fold((Scalar::one(), Scalar::one()), |(n1, d1), (n2, d2)| (n1 * n2, d1 * d2));
-            num_e.push(cfrags[i].E_1 * n);
-            num_v.push(cfrags[i].V_1 * n);
-            den.push(d);
+                .fold((Scalar::one(), Scalar::one()), |(n, d), (j, s)| {
+                    if i == j {
+                        return (n, d)
+                    }
+                    (n * s, d * (s - S[i]))
+                });
+            numer.push(cfrags[i].E_1 * n + cfrags[i].V_1 * n);
+            denum.push(d);
         }
-        let mut E_prime = num_e[0] * den[0].invert();
-        let mut V_prime = num_v[0] * den[0].invert();
+        let mut point = numer[0] * denum[0].invert();
         for i in 1 .. S.len() {
-            E_prime += num_e[i] * den[i].invert();
-            V_prime += num_v[i] * den[i].invert();
+            point += numer[i] * denum[i].invert();
         }
 
         // 3.2.4 (4):
@@ -381,7 +381,7 @@ impl Keypair {
         };
 
         // 3.2.4 (5):
-        Ok(kdf(((E_prime + V_prime) * &d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
+        Ok(kdf((point * &d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
     }
 }
 
