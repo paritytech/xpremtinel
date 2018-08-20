@@ -97,7 +97,8 @@ use blake2b_simd::Params;
 use curve25519_dalek::{
     constants,
     ristretto::{CompressedRistretto, RistrettoBasepointTable, RistrettoPoint},
-    scalar::Scalar
+    scalar::Scalar,
+    traits::MultiscalarMul
 };
 use rand::prelude::*;
 use subtle::ConstantTimeEq;
@@ -363,12 +364,9 @@ impl Keypair {
                     (n * s, d * (s - S[i]))
                 });
             numer.push(cfrags[i].E_1 * n + cfrags[i].V_1 * n);
-            denum.push(d);
+            denum.push(d.invert());
         }
-        let mut point = numer[0] * denum[0].invert();
-        for i in 1 .. S.len() {
-            point += numer[i] * denum[i].invert();
-        }
+        let point = RistrettoPoint::multiscalar_mul(&denum, &numer);
 
         // 3.2.4 (4):
         let d = {
