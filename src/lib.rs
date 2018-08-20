@@ -170,8 +170,9 @@ pub struct PublicKey {
 impl PublicKey {
     // 3.2.3
     pub fn encapsulate(&self) -> (Key, Capsule) {
-        let r = Scalar::random(&mut thread_rng());
-        let u = Scalar::random(&mut thread_rng());
+        let rng = &mut thread_rng();
+        let r = Scalar::random(rng);
+        let u = Scalar::random(rng);
         let E = &g * &r;
         let V = &g * &u;
         let s = u + r * hash(&[E.compress().as_bytes(), V.compress().as_bytes()]);
@@ -263,6 +264,8 @@ impl Keypair {
         assert!(t >  0);
         assert!(n >= t);
 
+        let rng = &mut thread_rng();
+
         // 3.2.2 (1):
         let ephemeral = Keypair::new(); // (x_a, X_a)
 
@@ -276,7 +279,7 @@ impl Keypair {
         // 3.2.2 (3):
         let mut coeff = Vec::with_capacity(t - 1);
         for _ in 0 .. t - 1 {
-            coeff.push(Scalar::random(&mut thread_rng()))
+            coeff.push(Scalar::random(rng))
         }
 
         let f_0 = self.secret.scalar * d.invert(); // the secret to share
@@ -301,8 +304,8 @@ impl Keypair {
         // 3.2.2 (6a)
         let mut KF = Vec::with_capacity(n);
         for _ in 0 .. n {
-            let id = Scalar::random(&mut thread_rng());
-            let y  = Scalar::random(&mut thread_rng());
+            let id = Scalar::random(rng);
+            let y  = Scalar::random(rng);
 
             // 3.2.2 (6b)
             let sx = hash(&[id.as_bytes(), D.as_bytes()]);
@@ -345,15 +348,15 @@ impl Keypair {
         ]);
 
         // 3.2.4 (2):
-        let mut S = Vec::new();
+        let mut S = Vec::with_capacity(cfrags.len());
         for cfrag_i in cfrags {
             let sx_i = hash(&[cfrag_i.id.as_bytes(), D.as_bytes()]);
             S.push(sx_i);
         }
 
         // 3.2.4 (3):
-        let mut numer = Vec::new();
-        let mut denum = Vec::new();
+        let mut numer = Vec::with_capacity(S.len());
+        let mut denum = Vec::with_capacity(S.len());
         for i in 0 .. S.len() {
             let (n, d) = S.iter()
                 .enumerate()
