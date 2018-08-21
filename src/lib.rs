@@ -16,7 +16,7 @@
 //! ```
 //!
 //! Note that k and c can be created without Alice's involvement, requiring only her
-//! public key. The capsule c is put as associated data into the AEAD encrypted message
+//! public key. The capsule c is used as associated data in the AEAD encrypted message
 //! which uses k for encryption.
 //!
 //! Alice herself can de-encapsulate k given c with her private key a
@@ -47,7 +47,7 @@
 //! cf = ((g^r)^rk, (g^u)^rk, g^x)
 //! ```
 //!
-//! which it hands over to Bob together with the encrypted message (without c).
+//! which it hands over to Bob together with the encrypted message.
 //! Bob, using his secret key b and cf, derives k as follows:
 //!
 //! ```text
@@ -91,6 +91,7 @@ extern crate hkdf;
 #[macro_use]
 extern crate lazy_static;
 extern crate rand;
+extern crate ring;
 extern crate smallvec;
 extern crate subtle;
 
@@ -102,8 +103,10 @@ use curve25519_dalek::{
     traits::MultiscalarMul
 };
 use rand::prelude::*;
+use ring::aead;
 use smallvec::SmallVec;
 use subtle::ConstantTimeEq;
+use std::{fmt, iter, ops::Deref};
 
 type Vector<T> = SmallVec<[T; 8]>;
 
@@ -130,21 +133,40 @@ lazy_static! {
 }
 
 
-// Symmetric encryption/decryption key `K`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Key(Vec<u8>);
-
-impl AsRef<[u8]> for Key {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
-
 #[derive(Debug)]
 pub enum Error {
     Empty,
-    InvalidCapsule
+    InvalidCapsule,
+    Decrypt,
+    Encrypt,
+    Deserialise(&'static str)
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::Empty => f.write_str("empty"),
+            Error::InvalidCapsule => f.write_str("invalid capsule"),
+            Error::Decrypt => f.write_str("decrypt error"),
+            Error::Encrypt => f.write_str("encrypt error"),
+            Error::Deserialise(m) => write!(f, "deserialisation error: {}", m)
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+
+// Symmetric encryption/decryption key `K`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Key([u8; 32]);
+
+impl Deref for Key {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
 }
 
 
@@ -160,6 +182,13 @@ impl SecretKey {
             return Err(Error::InvalidCapsule)
         }
         Ok(kdf(((cap.E + cap.V) * &self.scalar).compress().as_bytes()))
+    }
+
+    pub fn decrypt<'a>(&self, nonce: &[u8; 12], cap: &Capsule, cipher: &'a mut [u8]) -> Result<&'a [u8], Error> {
+        let k = self.decapsulate(cap)?;
+        let ok = aead::OpeningKey::new(&aead::CHACHA20_POLY1305, &k).map_err(|_| Error::Decrypt)?;
+        let ad = cap.serialise();
+        Ok(&aead::open_in_place(&ok, nonce, &ad, 0, cipher).map_err(|_| Error::Decrypt)?[..])
     }
 }
 
@@ -182,6 +211,20 @@ impl PublicKey {
         let k = kdf((self.point * &(r + u)).compress().as_bytes());
         let c = Capsule { E, V, s };
         (k, c)
+    }
+
+    pub fn encrypt(&self, nonce: &[u8; 12], mut msg: Vec<u8>) -> Result<(Capsule, Vec<u8>), Error> {
+        let (k, cap) = self.encapsulate();
+
+        let sk = aead::SealingKey::new(&aead::CHACHA20_POLY1305, &k).map_err(|_| Error::Encrypt)?;
+        let tl = aead::CHACHA20_POLY1305.tag_len();
+        let ad = cap.serialise();
+
+        msg.extend(iter::repeat(0).take(tl));
+        let out_len = aead::seal_in_place(&sk, nonce, &ad, &mut msg, tl).map_err(|_| Error::Encrypt)?;
+        msg.truncate(out_len);
+
+        Ok((cap, msg))
     }
 }
 
@@ -221,6 +264,7 @@ pub struct CapsuleFrag {
 
 
 // 3.2.3
+#[derive(Clone)]
 pub struct Capsule {
     E: RistrettoPoint,
     V: RistrettoPoint,
@@ -233,6 +277,34 @@ impl Capsule {
         let expected = &g * &self.s;
         let h = hash(&[self.E.compress().as_bytes(), self.V.compress().as_bytes()]);
         expected.ct_eq(&(self.V + self.E * &h)).unwrap_u8() == 1 // cf. 2.1 and RFC 6090 (App. E)
+    }
+
+    pub fn serialise(&self) -> [u8; 96] {
+        let mut b = [0; 96];
+        let ce = self.E.compress();
+        (&mut b[0..32]).copy_from_slice(ce.as_bytes());
+        let ve = self.V.compress();
+        (&mut b[32..64]).copy_from_slice(ve.as_bytes());
+        (&mut b[64..96]).copy_from_slice(self.s.as_bytes());
+        b
+    }
+
+    pub fn deserialise(input: &[u8]) -> Result<Self, Error> {
+        if input.len() != 96 {
+            return Err(Error::Deserialise("invalid input length"))
+        }
+        let mut b = [0; 32];
+        (&mut b).copy_from_slice(&input[0..32]);
+        let ce = CompressedRistretto(b);
+        (&mut b).copy_from_slice(&input[32..64]);
+        let ve = CompressedRistretto(b);
+        (&mut b).copy_from_slice(&input[64..96]);
+        let s = Scalar::from_canonical_bytes(b).ok_or(Error::Deserialise("scalar not canonical"))?;
+        Ok(Self {
+            E: ce.decompress().ok_or(Error::Deserialise("failed to decompress E"))?,
+            V: ve.decompress().ok_or(Error::Deserialise("failed to decompress V"))?,
+            s
+        })
     }
 }
 
@@ -288,11 +360,12 @@ impl Keypair {
         let f_0 = self.secret.scalar * d.invert(); // the secret to share
 
         // 3.2.2 (4):
-        let f = |mut x: Scalar| {
+        let f = |x: Scalar| {
             let mut y = f_0;
+            let mut k = x;
             for i in 0 .. t - 1 {
-                y += coeff[i] * x;
-                x *= x
+                y += coeff[i] * k;
+                k *= x
             }
             y
         };
@@ -387,6 +460,13 @@ impl Keypair {
         // 3.2.4 (5):
         Ok(kdf((point * &d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
     }
+
+    pub fn decrypt<'a>(&self, pk_a: &PublicKey, nonce: &[u8; 12], cap: &Capsule, cfrags: &[CapsuleFrag], cipher: &'a mut [u8]) -> Result<&'a [u8], Error> {
+        let k = self.decapsulate_frags(pk_a, cfrags)?;
+        let ok = aead::OpeningKey::new(&aead::CHACHA20_POLY1305, &k).map_err(|_| Error::Decrypt)?;
+        let ad = cap.serialise();
+        Ok(&aead::open_in_place(&ok, nonce, &ad, 0, cipher).map_err(|_| Error::Decrypt)?[..])
+    }
 }
 
 
@@ -405,6 +485,8 @@ fn hash(inputs: &[&[u8]]) -> Scalar {
 // 5.4
 fn kdf(input: &[u8]) -> Key {
     let kdf = hkdf::Hkdf::<blake2::Blake2b>::extract(None, input);
-    Key(kdf.expand(b"pre", 64))
+    let mut k = [0; 32];
+    kdf.expand(b"pre", &mut k).expect("32 < 255 * 64");
+    Key(k)
 }
 
