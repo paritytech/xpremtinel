@@ -91,6 +91,7 @@ extern crate hkdf;
 #[macro_use]
 extern crate lazy_static;
 extern crate rand;
+extern crate smallvec;
 extern crate subtle;
 
 use blake2b_simd::Params;
@@ -101,8 +102,10 @@ use curve25519_dalek::{
     traits::MultiscalarMul
 };
 use rand::prelude::*;
+use smallvec::SmallVec;
 use subtle::ConstantTimeEq;
 
+type Vector<T> = SmallVec<[T; 8]>;
 
 // Generator element `g` (cf. section 3.2.1).
 const g: RistrettoBasepointTable = constants::RISTRETTO_BASEPOINT_TABLE;
@@ -277,7 +280,7 @@ impl Keypair {
         ]);
 
         // 3.2.2 (3):
-        let mut coeff = Vec::with_capacity(t - 1);
+        let mut coeff = Vector::with_capacity(t - 1);
         for _ in 0 .. t - 1 {
             coeff.push(Scalar::random(rng))
         }
@@ -302,7 +305,7 @@ impl Keypair {
         ]);
 
         // 3.2.2 (6a)
-        let mut KF = Vec::with_capacity(n);
+        let mut KF = Vector::with_capacity(n);
         for _ in 0 .. n {
             let id = Scalar::random(rng);
             let y  = Scalar::random(rng);
@@ -331,7 +334,7 @@ impl Keypair {
 
             KF.push(Kfrag { id, rk, pk_x: ephemeral.public.clone(), u_1: U_1, z_1, z_2 })
         }
-        KF
+        KF.into_vec()
     }
 
     // 3.2.4 (DecapsulateFrags)
@@ -348,15 +351,15 @@ impl Keypair {
         ]);
 
         // 3.2.4 (2):
-        let mut S = Vec::with_capacity(cfrags.len());
+        let mut S = Vector::with_capacity(cfrags.len());
         for cfrag_i in cfrags {
             let sx_i = hash(&[cfrag_i.id.as_bytes(), D.as_bytes()]);
             S.push(sx_i);
         }
 
         // 3.2.4 (3):
-        let mut numer = Vec::with_capacity(S.len());
-        let mut denum = Vec::with_capacity(S.len());
+        let mut numer = Vector::with_capacity(S.len());
+        let mut denum = Vector::with_capacity(S.len());
         for i in 0 .. S.len() {
             let (n, d) = S.iter()
                 .enumerate()
