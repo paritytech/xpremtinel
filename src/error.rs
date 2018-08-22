@@ -1,11 +1,18 @@
-use std::{error, fmt};
+use std::{self, fmt};
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
+    /// Empty collection or iterator.
     Empty,
+    /// The capsule is invalid.
     InvalidCapsule,
+    /// Error when decrypting ciphertext.
     Decrypt,
+    /// Error when encrypting plaintext.
     Encrypt,
+    /// Error during serialisation.
     Serialise
 }
 
@@ -21,5 +28,5 @@ impl fmt::Display for Error {
     }
 }
 
-impl error::Error for Error {}
+impl std::error::Error for Error {}
 

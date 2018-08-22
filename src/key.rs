@@ -19,3 +19,21 @@ impl Deref for Key {
 }
 
 
+/// A value which must only be used once for an encryption key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nonce([u8; 12]);
+
+impl Nonce {
+    pub fn new(xs: [u8; 12]) -> Self {
+        Nonce(xs)
+    }
+}
+
+impl Deref for Nonce {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+

@@ -5,6 +5,9 @@ use subtle::ConstantTimeEq;
 use util::hash;
 use g;
 
+/// The capsule is created by data producers using `PublicKey::encapsulate`.
+/// It will allow deriving the symmetric encryption key again.
+///
 // 3.2.3
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Capsule {
@@ -14,6 +17,8 @@ pub struct Capsule {
 }
 
 impl Capsule {
+    /// Check, that this capsule is valid.
+    ///
     // 3.2.3
     pub fn check(&self) -> bool {
         let expected = &g * &self.s;
@@ -22,9 +27,15 @@ impl Capsule {
     }
 }
 
+
+/// A capsule fragment is created by a proxy node using `KeyFragment::re_encapsulate`.
+/// It contains part of the data which will allow Bob to decrypt ciphertext encrypted
+/// with Alice's public key if she generated re-encryption keys and distributed them to
+/// the proxy.
+///
 // 3.2.4
 #[derive(Clone, Serialize, Deserialize)]
-pub struct CapsuleFrag {
+pub struct CapsuleFragment {
     pub(crate) E_1: Point,
     pub(crate) V_1: Point,
     pub(crate) id: Scalar,

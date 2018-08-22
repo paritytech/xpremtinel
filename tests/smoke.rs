@@ -47,9 +47,9 @@ fn rekey() -> Result<(), pre::Error> {
 fn encrypt_decrypt() -> Result<(), pre::Error> {
     let alice = pre::Keypair::new();
     let mut buf = b"hello world".to_vec();
-    let nonce = b"123456789012";
-    let capsule = alice.public().encrypt(nonce, &mut buf)?;
-    let plaintext = alice.secret().decrypt(nonce, &capsule, &mut buf)?;
+    let nonce = pre::Nonce::new(*b"123456789012");
+    let capsule = alice.public().encrypt(&nonce, &mut buf)?;
+    let plaintext = alice.secret().decrypt(&nonce, &capsule, &mut buf)?;
     assert_eq!(b"hello world", plaintext);
     Ok(())
 }
@@ -61,9 +61,9 @@ fn roundtrip() -> Result<(), pre::Error> {
     let bob = pre::Keypair::new();
 
     let mut buf = b"hello world".to_vec();
-    let nonce = b"123456789012";
+    let nonce = pre::Nonce::new(*b"123456789012");
 
-    let capsule = alice.public().encrypt(nonce, &mut buf)?;
+    let capsule = alice.public().encrypt(&nonce, &mut buf)?;
 
     let kfrags = alice.rekey(bob.public(), 19, 7);
     let mut cfrags = Vec::with_capacity(kfrags.len());
@@ -71,7 +71,7 @@ fn roundtrip() -> Result<(), pre::Error> {
         cfrags.push(kfrag_i.re_encapsulate(&capsule)?)
     }
 
-    let plaintext = bob.decrypt(alice.public(), nonce, &capsule, &cfrags[..7], &mut buf)?;
+    let plaintext = bob.decrypt(alice.public(), &nonce, &capsule, &cfrags[..7], &mut buf)?;
     assert_eq!(b"hello world", plaintext);
     Ok(())
 }

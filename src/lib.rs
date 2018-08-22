@@ -107,15 +107,12 @@ mod point;
 mod scalar;
 mod util;
 
-use curve25519_dalek::{
-    constants,
-    ristretto::{CompressedRistretto, RistrettoBasepointTable}
-};
+use curve25519_dalek::{constants, ristretto::{CompressedRistretto, RistrettoBasepointTable}};
 
-pub use capsule::{Capsule, CapsuleFrag};
+pub use capsule::{Capsule, CapsuleFragment};
 pub use error::Error;
-pub use key::Key;
-pub use keypair::{Keypair, SecretKey, PublicKey, Kfrag};
+pub use key::{Key, Nonce};
+pub use keypair::{Keypair, SecretKey, PublicKey, KeyFragment};
 
 
 // Generator element `g` (cf. section 3.2.1).
