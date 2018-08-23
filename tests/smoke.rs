@@ -71,6 +71,7 @@ fn roundtrip() -> Result<(), pre::Error> {
     for kfrag_i in kfrags {
         cfrags.push(kfrag_i.re_encapsulate(&capsule)?)
     }
+    thread_rng().shuffle(&mut cfrags);
 
     let plaintext = bob.decrypt(alice.public(), &nonce, &capsule, &cfrags[..7], &mut buf)?;
     assert_eq!(b"hello world", plaintext);
