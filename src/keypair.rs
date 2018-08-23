@@ -115,7 +115,7 @@ impl Keypair {
             // 3.2.2 (6d):
             let U_1 = &*U * &rk;
 
-            // 3.2.2 (6e):
+            // 3.2.2 (6e) (Schnorr signature):
             let z_1 = hash(&[
                 Y.as_bytes(),
                 id.as_bytes(),
@@ -124,7 +124,6 @@ impl Keypair {
                 U_1.compress().as_bytes(),
                 ephemeral.public.point.compress().as_bytes()
             ]);
-
             let z_2 = Scalar(*y - *self.secret.scalar * *z_1);
 
             let kfrag = KeyFragment {
@@ -158,7 +157,18 @@ impl Keypair {
         let E_compress = cap.E.compress();
         let V_compress = cap.V.compress();
         for cfrag_i in cfrags {
-            // 4.1 (1) check z_1, z_2 is correct: TODO
+            // 4.1 (1) (Schnorr signature verification)
+            let r_v = &g * &*cfrag_i.pi.z_2 + *pk_a.point * *cfrag_i.pi.z_1;
+            let e_v = hash(&[r_v.compress().as_bytes(),
+                cfrag_i.id.as_bytes(),
+                pk_a.point.compress().as_bytes(),
+                self.public.point.compress().as_bytes(),
+                cfrag_i.pi.U_1.compress().as_bytes(),
+                cfrag_i.pk_x.point.compress().as_bytes()
+            ]);
+            if *e_v != *cfrag_i.pi.z_1 {
+                return Err(Error::Signature)
+            }
 
             // 4.2 (2)
             let h = hash(&[

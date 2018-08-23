@@ -10,6 +10,8 @@ pub enum Error {
     InvalidCapsule,
     /// Failed to verify proof.
     Proof,
+    /// Failed to verify signature.
+    Signature,
     /// Error when decrypting ciphertext.
     Decrypt,
     /// Error when encrypting plaintext.
@@ -24,6 +26,7 @@ impl fmt::Display for Error {
             Error::Empty => f.write_str("empty"),
             Error::InvalidCapsule => f.write_str("invalid capsule"),
             Error::Proof => f.write_str("proof verification failed"),
+            Error::Signature => f.write_str("signature verification failed"),
             Error::Decrypt => f.write_str("decrypt error"),
             Error::Encrypt => f.write_str("encrypt error"),
             Error::Serialise => f.write_str("failed to serialise")
