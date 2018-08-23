@@ -6,10 +6,14 @@ use key::Key;
 
 
 // 5.2
-pub(crate) fn hash(inputs: &[&[u8]]) -> Scalar {
+pub(crate) fn hash<'a, I, T>(inputs: I) -> Scalar
+where
+    I: IntoIterator<Item=T> + Copy,
+    T: AsRef<[u8]>
+{
     let mut state = Params::new().hash_length(64).to_state();
     for i in inputs {
-        state.update(i);
+        state.update(i.as_ref());
     }
     let hash = state.finalize();
     let mut bytes = [0u8; 64];

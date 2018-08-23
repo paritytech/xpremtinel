@@ -145,10 +145,16 @@ impl Keypair {
     /// this method is part of the Umbral KEM construction.
     ///
     // 3.2.4 (DecapsulateFrags)
-    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cap: &Capsule, cfrags: &[CapsuleFragment]) -> Result<Key> {
-        if cfrags.is_empty() {
-            return Err(Error::Empty)
-        }
+    pub fn decapsulate_frags<'a, I>(&self, pk_a: &PublicKey, cap: &Capsule, cfrags: I) -> Result<Key>
+    where
+        I: IntoIterator<Item=&'a CapsuleFragment> + Copy
+    {
+        let cfrag_0 =
+            if let Some(cf) = cfrags.into_iter().next() {
+                cf
+            } else {
+                return Err(Error::Empty)
+            };
 
         // proof verification (4.2)
 
@@ -201,15 +207,17 @@ impl Keypair {
         ]);
 
         // 3.2.4 (2):
-        let mut S = Vector::with_capacity(cfrags.len());
+        let mut S = Vector::new();
         for cfrag_i in cfrags {
             let sx_i = hash(&[cfrag_i.id.as_bytes(), D.as_bytes()]);
             S.push(sx_i);
         }
 
         // 3.2.4 (3):
-        let nd = S.iter().enumerate()
-            .fold(Vector::with_capacity(S.len()), |mut nd, (i, sx_i)| {
+        let nd = S.iter()
+            .zip(cfrags)
+            .enumerate()
+            .fold(Vector::with_capacity(S.len()), |mut nd, (i, (sx_i, cfrag))| {
                 let (n, d) = S.iter().enumerate()
                     .fold((Scalar::one(), Scalar::one()), |(n, d), (j, sx_j)| {
                         if i == j {
@@ -218,7 +226,7 @@ impl Keypair {
                             (n * *sx_j, d * (*sx_j - *sx_i))
                         }
                     });
-                nd.push((cfrags[i].E_1 * n + cfrags[i].V_1 * n, d.invert()));
+                nd.push((cfrag.E_1 * n + cfrag.V_1 * n, d.invert()));
                 nd
             });
         let numers = nd.iter().map(|nd| nd.0);
@@ -226,14 +234,11 @@ impl Keypair {
         let point = RistrettoPoint::multiscalar_mul(denums, numers);
 
         // 3.2.4 (4):
-        let d = {
-            let cfrag = &cfrags[0]; // all fragments share the same ephemeral public key:
-            hash(&[
-                cfrag.pk_x.point.compress().as_bytes(),
-                self.public.point.compress().as_bytes(),
-                (cfrag.pk_x.point * self.secret.scalar).compress().as_bytes()
-            ])
-        };
+        let d = hash(&[
+            cfrag_0.pk_x.point.compress().as_bytes(),
+            self.public.point.compress().as_bytes(),
+            (cfrag_0.pk_x.point * self.secret.scalar).compress().as_bytes()
+        ]);
 
         // 3.2.4 (5):
         Ok(kdf((point * d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
@@ -245,19 +250,14 @@ impl Keypair {
     /// This operation would be executed by Bob, once he has collected the necessary number
     /// of capsule fragments. Internally this method uses `Keypair::decapsulate_frags` to get the
     /// symmetric key.
-    pub fn decrypt<'a>(
-        &self,
-        pk_a: &PublicKey,
-        n: &Nonce,
-        cap: &Capsule,
-        cfrags: &[CapsuleFragment],
-        cipher: &'a mut [u8]
-    ) -> Result<&'a [u8]>
+    pub fn decrypt<'a, 'b, I>(&self, pk_a: &PublicKey, n: &Nonce, c: &Capsule, cfrags: I, ciph: &'a mut [u8]) -> Result<&'a [u8]>
+    where
+        I: IntoIterator<Item=&'b CapsuleFragment> + Copy
     {
-        let k = self.decapsulate_frags(pk_a, cap, cfrags)?;
+        let k = self.decapsulate_frags(pk_a, c, cfrags)?;
         let ok = aead::OpeningKey::new(&aead::CHACHA20_POLY1305, &k).map_err(|_| Error::Decrypt)?;
-        let ad = bincode::serialize(cap).map_err(|_| Error::Serialise)?;
-        Ok(&aead::open_in_place(&ok, n, &ad, 0, cipher).map_err(|_| Error::Decrypt)?[..])
+        let ad = bincode::serialize(c).map_err(|_| Error::Serialise)?;
+        Ok(&aead::open_in_place(&ok, n, &ad, 0, ciph).map_err(|_| Error::Decrypt)?[..])
     }
 }
 
