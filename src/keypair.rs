@@ -1,5 +1,5 @@
 use bincode;
-use capsule::{Capsule, CapsuleFragment};
+use capsule::{Capsule, CapsuleFragment, Proof};
 use curve25519_dalek::{ristretto::RistrettoPoint, traits::MultiscalarMul};
 use error::{Error, Result};
 use key::{Key, Nonce};
@@ -131,7 +131,7 @@ impl Keypair {
                 id,
                 rk,
                 pk_x: ephemeral.public.clone(),
-                u_1: Point(U_1),
+                U_1: Point(U_1),
                 z_1,
                 z_2
             };
@@ -148,9 +148,41 @@ impl Keypair {
     /// this method is part of the Umbral KEM construction.
     ///
     // 3.2.4 (DecapsulateFrags)
-    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cfrags: &[CapsuleFragment]) -> Result<Key> {
+    pub fn decapsulate_frags(&self, pk_a: &PublicKey, cap: &Capsule, cfrags: &[CapsuleFragment]) -> Result<Key> {
         if cfrags.is_empty() {
             return Err(Error::Empty)
+        }
+
+        // proof verification (4.2)
+
+        let E_compress = cap.E.compress();
+        let V_compress = cap.V.compress();
+        for cfrag_i in cfrags {
+            // 4.1 (1) check z_1, z_2 is correct: TODO
+
+            // 4.2 (2)
+            let h = hash(&[
+                E_compress.as_bytes(),
+                cfrag_i.E_1.compress().as_bytes(),
+                cfrag_i.pi.E_2.compress().as_bytes(),
+                V_compress.as_bytes(),
+                cfrag_i.V_1.compress().as_bytes(),
+                cfrag_i.pi.V_2.compress().as_bytes(),
+                U.basepoint().compress().as_bytes(),
+                cfrag_i.pi.U_1.compress().as_bytes(),
+                cfrag_i.pi.U_2.compress().as_bytes()
+            ]);
+
+            // 4.2 (3)
+            if (*cap.E * *cfrag_i.pi.p) != (*cfrag_i.pi.E_2 + *cfrag_i.E_1 * *h) {
+                return Err(Error::Proof)
+            }
+            if (*cap.V * *cfrag_i.pi.p) != (*cfrag_i.pi.V_2 + *cfrag_i.V_1 * *h) {
+                return Err(Error::Proof)
+            }
+            if (&*U * &*cfrag_i.pi.p) != (*cfrag_i.pi.U_2 + *cfrag_i.pi.U_1 * *h) {
+                return Err(Error::Proof)
+            }
         }
 
         // 3.2.4 (1):
@@ -214,7 +246,7 @@ impl Keypair {
         cipher: &'a mut [u8]
     ) -> Result<&'a [u8]>
     {
-        let k = self.decapsulate_frags(pk_a, cfrags)?;
+        let k = self.decapsulate_frags(pk_a, cap, cfrags)?;
         let ok = aead::OpeningKey::new(&aead::CHACHA20_POLY1305, &k).map_err(|_| Error::Decrypt)?;
         let ad = bincode::serialize(cap).map_err(|_| Error::Serialise)?;
         Ok(&aead::open_in_place(&ok, n, &ad, 0, cipher).map_err(|_| Error::Decrypt)?[..])
@@ -302,12 +334,11 @@ impl PublicKey {
 ///
 // Cf. section 3.2.2 (6f)
 #[derive(Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct KeyFragment {
     id: Scalar,
     rk: Scalar,
     pk_x: PublicKey,
-    u_1: Point,
+    U_1: Point,
     z_1: Scalar,
     z_2: Scalar
 }
@@ -323,7 +354,50 @@ impl KeyFragment {
         }
         let E_1 = *cap.E * *self.rk;
         let V_1 = *cap.V * *self.rk;
-        Ok(CapsuleFragment { E_1: Point(E_1), V_1: Point(V_1), id: self.id, pk_x: self.pk_x.clone() })
+
+        let rng = &mut thread_rng();
+
+        // proof generation (4.1)
+
+        // 4.1 (1)
+        let t = Scalar::random(rng);
+
+        // 4.1 (2)
+        let E_2 = *cap.E * *t;
+        let V_2 = *cap.V * *t;
+        let U_2 = &*U * &*t;
+
+        // 4.1 (3)
+        let h = hash(&[
+            cap.E.compress().as_bytes(),
+            E_1.compress().as_bytes(),
+            E_2.compress().as_bytes(),
+            cap.V.compress().as_bytes(),
+            V_1.compress().as_bytes(),
+            V_2.compress().as_bytes(),
+            U.basepoint().compress().as_bytes(),
+            self.U_1.compress().as_bytes(),
+            U_2.compress().as_bytes()
+        ]);
+
+        // 4.1 (4)
+        let p = *t + *h * *self.rk;
+
+        Ok(CapsuleFragment {
+            E_1: Point(E_1),
+            V_1: Point(V_1),
+            id: self.id,
+            pk_x: self.pk_x.clone(),
+            pi: Proof {
+                E_2: Point(E_2),
+                V_2: Point(V_2),
+                U_2: Point(U_2),
+                U_1: self.U_1.clone(),
+                z_1: self.z_1,
+                z_2: self.z_2,
+                p: Scalar(p)
+            }
+        })
     }
 }
 

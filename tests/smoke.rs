@@ -29,7 +29,7 @@ fn rekey() -> Result<(), pre::Error> {
         for kfrag_i in kfrags {
             cfrags.push(kfrag_i.re_encapsulate(&cap)?)
         }
-        assert_eq!(k, bob.decapsulate_frags(alice.public(), &cfrags[..t])?, "n={}, t={}", n, t);
+        assert_eq!(k, bob.decapsulate_frags(alice.public(), &cap, &cfrags[..t])?, "n={}, t={}", n, t);
         Ok(())
     }
 

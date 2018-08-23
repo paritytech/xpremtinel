@@ -39,6 +39,21 @@ pub struct CapsuleFragment {
     pub(crate) E_1: Point,
     pub(crate) V_1: Point,
     pub(crate) id: Scalar,
-    pub(crate) pk_x: PublicKey
+    pub(crate) pk_x: PublicKey,
+    pub(crate) pi: Proof
+}
+
+
+/// Proof of re-encryption correctness.
+// 4.1
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Proof {
+    pub(crate) E_2: Point,
+    pub(crate) V_2: Point,
+    pub(crate) U_2: Point,
+    pub(crate) U_1: Point,
+    pub(crate) z_1: Scalar,
+    pub(crate) z_2: Scalar,
+    pub(crate) p: Scalar
 }
 
