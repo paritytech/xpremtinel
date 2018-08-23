@@ -326,3 +326,96 @@ impl KeyFragment {
     }
 }
 
+
+#[cfg(test)]
+mod attacks {
+    use curve25519_dalek;
+    use super::*;
+
+    // Bob and the proxy team up to recover Alice's secret key.
+    #[test]
+    fn collusion_bob_proxy_1() -> Result<()> {
+        let alice = Keypair::new();
+        let bob = Keypair::new();
+
+        // The proxy possesses kfrag. It contains rk = a / d for t = 1.
+        let kfrag = &alice.rekey(bob.public(), 1, 1)[0];
+
+        let d = {
+            hash(&[
+                kfrag.pk_x.point.compress().as_bytes(),
+                bob.public.point.compress().as_bytes(),
+                (*kfrag.pk_x.point * *bob.secret.scalar).compress().as_bytes()
+            ])
+        };
+
+        // The collusion: The proxy gave Bob its key fragment. Now Bob can recover Alice's secret:
+        let a = *kfrag.rk * *d;
+        assert_eq!(a.as_bytes(), alice.secret().scalar.as_bytes());
+
+        Ok(())
+    }
+
+
+    // Bob and t out of n proxies team up to recover Alice's secret key.
+    #[test]
+    fn collusion_bob_proxy_n_t() -> Result<()> {
+        let alice = Keypair::new();
+        let bob = Keypair::new();
+
+        let n = 6;
+        let t = 3;
+
+        let kfrags = alice.rekey(bob.public(), n, t);
+
+        let pk_x = &kfrags[0].pk_x; // the ephemeral public key is shared over all fragments
+
+        let d = {
+            hash(&[
+                pk_x.point.compress().as_bytes(),
+                bob.public.point.compress().as_bytes(),
+                (*pk_x.point * *bob.secret.scalar).compress().as_bytes()
+            ])
+        };
+
+        let D = hash(&[
+            alice.public().point.compress().as_bytes(),
+            bob.public().point.compress().as_bytes(),
+            (*alice.public().point * *bob.secret().scalar).compress().as_bytes()
+        ]);
+
+        // Bob recomputes the xs of the polynomial
+        let mut S = Vector::with_capacity(kfrags.len());
+        for kf in &kfrags[0..t] {
+            let sx_i = hash(&[kf.id.as_bytes(), D.as_bytes()]);
+            S.push(sx_i);
+        }
+
+        // Bob recomputes the re-encryption key by interpolating the polynomial with
+        // the key fragments, the t proxies gave to him.
+        let mut numer = Vector::with_capacity(S.len());
+        let mut denum = Vector::with_capacity(S.len());
+        for i in 0 .. S.len() {
+            let (n, d) = S.iter()
+                .enumerate()
+                .fold((Scalar::one(), Scalar::one()), |(n, d), (j, s)| {
+                    if i == j {
+                        return (n, d)
+                    }
+                    (Scalar((*n) * (**s)), Scalar((*d) * ((**s) - (*S[i]))))
+                });
+            numer.push((*kfrags[i].rk) * (*n));
+            denum.push(d.invert());
+        }
+        let mut rk = Scalar(curve25519_dalek::scalar::Scalar::zero());
+        for (n, d) in numer.iter().zip(denum.iter()) {
+            rk = Scalar(*rk + *n * *d)
+        }
+
+        // Finally, Bob is able to recover Alice's secret:
+        let a = *rk * *d;
+        assert_eq!(a.as_bytes(), alice.secret().scalar.as_bytes());
+
+        Ok(())
+    }
+}
