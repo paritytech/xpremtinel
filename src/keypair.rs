@@ -86,7 +86,7 @@ impl Keypair {
             let mut y = f_0;
             let mut k = x;
             for c in coeff.iter().take(t - 1) {
-                y  += (**c) * (*k);
+                y  += **c * *k;
                 *k *= *x
             }
             Scalar(y)
@@ -125,7 +125,7 @@ impl Keypair {
                 ephemeral.public.point.compress().as_bytes()
             ]);
 
-            let z_2 = Scalar((*y) - *self.secret.scalar * (*z_1));
+            let z_2 = Scalar(*y - *self.secret.scalar * *z_1);
 
             let kfrag = KeyFragment {
                 id,
@@ -168,21 +168,22 @@ impl Keypair {
         }
 
         // 3.2.4 (3):
-        let mut numer = Vector::with_capacity(S.len());
-        let mut denum = Vector::with_capacity(S.len());
-        for i in 0 .. S.len() {
-            let (n, d) = S.iter()
-                .enumerate()
-                .fold((Scalar::one(), Scalar::one()), |(n, d), (j, s)| {
-                    if i == j {
-                        return (n, d)
-                    }
-                    (Scalar((*n) * (**s)), Scalar((*d) * ((**s) - (*S[i]))))
-                });
-            numer.push((*cfrags[i].E_1) * (*n) + (*cfrags[i].V_1) * (*n));
-            denum.push(d.invert());
-        }
-        let point = RistrettoPoint::multiscalar_mul(&denum, &numer);
+        let nd = S.iter().enumerate()
+            .fold(Vector::with_capacity(S.len()), |mut nd, (i, sx_i)| {
+                let (n, d) = S.iter().enumerate()
+                    .fold((Scalar::one(), Scalar::one()), |(n, d), (j, sx_j)| {
+                        if i == j {
+                            (n, d)
+                        } else {
+                            (Scalar(*n * **sx_j), Scalar(*d * (**sx_j - **sx_i)))
+                        }
+                    });
+                nd.push((*cfrags[i].E_1 * *n + *cfrags[i].V_1 * *n, d.invert()));
+                nd
+            });
+        let numers = nd.iter().map(|nd| nd.0);
+        let denums = nd.iter().map(|nd| nd.1);
+        let point = RistrettoPoint::multiscalar_mul(denums, numers);
 
         // 3.2.4 (4):
         let d = {
@@ -270,7 +271,7 @@ impl PublicKey {
         let u = Scalar::random(rng);
         let E = &g * &r;
         let V = &g * &u;
-        let s = *u + *r * (*hash(&[E.compress().as_bytes(), V.compress().as_bytes()]));
+        let s = *u + *r * *hash(&[E.compress().as_bytes(), V.compress().as_bytes()]);
         let k = kdf((*self.point * (*r + *u)).compress().as_bytes());
         let c = Capsule { E: Point(E), V: Point(V), s: Scalar(s) };
         (k, c)
@@ -386,7 +387,7 @@ mod attacks {
 
         // Bob recomputes the xs of the polynomial
         let mut S = Vector::with_capacity(kfrags.len());
-        for kf in &kfrags[0..t] {
+        for kf in &kfrags[0 .. t] {
             let sx_i = hash(&[kf.id.as_bytes(), D.as_bytes()]);
             S.push(sx_i);
         }
@@ -402,9 +403,9 @@ mod attacks {
                     if i == j {
                         return (n, d)
                     }
-                    (Scalar((*n) * (**s)), Scalar((*d) * ((**s) - (*S[i]))))
+                    (Scalar(*n * **s), Scalar(*d * (**s - *S[i])))
                 });
-            numer.push((*kfrags[i].rk) * (*n));
+            numer.push(*kfrags[i].rk * *n);
             denum.push(d.invert());
         }
         let mut rk = Scalar(curve25519_dalek::scalar::Scalar::zero());
