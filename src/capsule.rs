@@ -1,6 +1,5 @@
+use curve25519_dalek::{scalar::Scalar, ristretto::RistrettoPoint};
 use keypair::PublicKey;
-use point::Point;
-use scalar::Scalar;
 use subtle::ConstantTimeEq;
 use util::hash;
 use g;
@@ -11,8 +10,8 @@ use g;
 // 3.2.3
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Capsule {
-    pub(crate) E: Point,
-    pub(crate) V: Point,
+    pub(crate) E: RistrettoPoint,
+    pub(crate) V: RistrettoPoint,
     pub(crate) s: Scalar
 }
 
@@ -23,7 +22,7 @@ impl Capsule {
     pub fn check(&self) -> bool {
         let expected = &g * &self.s;
         let h = hash(&[self.E.compress().as_bytes(), self.V.compress().as_bytes()]);
-        expected.ct_eq(&(*self.V + *self.E * *h)).unwrap_u8() == 1 // cf. 2.1 and RFC 6090 (App. E)
+        expected.ct_eq(&(self.V + self.E * h)).unwrap_u8() == 1 // cf. 2.1 and RFC 6090 (App. E)
     }
 }
 
@@ -36,8 +35,8 @@ impl Capsule {
 // 3.2.4
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CapsuleFragment {
-    pub(crate) E_1: Point,
-    pub(crate) V_1: Point,
+    pub(crate) E_1: RistrettoPoint,
+    pub(crate) V_1: RistrettoPoint,
     pub(crate) id: Scalar,
     pub(crate) pk_x: PublicKey,
     pub(crate) pi: Proof
@@ -48,10 +47,10 @@ pub struct CapsuleFragment {
 // 4.1
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Proof {
-    pub(crate) E_2: Point,
-    pub(crate) V_2: Point,
-    pub(crate) U_2: Point,
-    pub(crate) U_1: Point,
+    pub(crate) E_2: RistrettoPoint,
+    pub(crate) V_2: RistrettoPoint,
+    pub(crate) U_2: RistrettoPoint,
+    pub(crate) U_1: RistrettoPoint,
     pub(crate) z_1: Scalar,
     pub(crate) z_2: Scalar,
     pub(crate) p: Scalar

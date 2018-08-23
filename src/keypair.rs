@@ -1,12 +1,10 @@
 use bincode;
 use capsule::{Capsule, CapsuleFragment, Proof};
-use curve25519_dalek::{ristretto::RistrettoPoint, traits::MultiscalarMul};
+use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar, traits::MultiscalarMul};
 use error::{Error, Result};
 use key::{Key, Nonce};
-use point::Point;
 use rand::prelude::*;
 use ring::aead;
-use scalar::Scalar;
 use smallvec::SmallVec;
 use std::iter;
 use util::{hash, kdf};
@@ -37,7 +35,7 @@ impl Keypair {
         let p = &g * &s;
         Keypair {
             secret: SecretKey { scalar: s },
-            public: PublicKey { point: Point(p) }
+            public: PublicKey { point: p }
         }
     }
 
@@ -70,7 +68,7 @@ impl Keypair {
         let d = hash(&[
             ephemeral.public.point.compress().as_bytes(),
             pk_b.point.compress().as_bytes(),
-            (*pk_b.point * *ephemeral.secret.scalar).compress().as_bytes()
+            (pk_b.point * ephemeral.secret.scalar).compress().as_bytes()
         ]);
 
         // 3.2.2 (3):
@@ -79,24 +77,24 @@ impl Keypair {
             coeff.push(Scalar::random(rng))
         }
 
-        let f_0 = *self.secret.scalar * d.invert(); // the secret to share
+        let f_0 = self.secret.scalar * d.invert(); // the secret to share
 
         // 3.2.2 (4):
         let f = |x: Scalar| {
             let mut y = f_0;
             let mut k = x;
             for c in coeff.iter().take(t - 1) {
-                y  += **c * *k;
-                *k *= *x
+                y  += *c * k;
+                k *= x
             }
-            Scalar(y)
+            y
         };
 
         // 3.2.2 (5):
         let D = hash(&[
             self.public.point.compress().as_bytes(),
             pk_b.point.compress().as_bytes(),
-            (*pk_b.point * *self.secret.scalar).compress().as_bytes()
+            (pk_b.point * self.secret.scalar).compress().as_bytes()
         ]);
 
         // 3.2.2 (6a)
@@ -124,13 +122,13 @@ impl Keypair {
                 U_1.compress().as_bytes(),
                 ephemeral.public.point.compress().as_bytes()
             ]);
-            let z_2 = Scalar(*y - *self.secret.scalar * *z_1);
+            let z_2 = y - self.secret.scalar * z_1;
 
             let kfrag = KeyFragment {
                 id,
                 rk,
                 pk_x: ephemeral.public.clone(),
-                U_1: Point(U_1),
+                U_1,
                 z_1,
                 z_2
             };
@@ -158,7 +156,7 @@ impl Keypair {
         let V_compress = cap.V.compress();
         for cfrag_i in cfrags {
             // 4.1 (1) (Schnorr signature verification)
-            let r_v = &g * &*cfrag_i.pi.z_2 + *pk_a.point * *cfrag_i.pi.z_1;
+            let r_v = &g * &cfrag_i.pi.z_2 + pk_a.point * cfrag_i.pi.z_1;
             let e_v = hash(&[r_v.compress().as_bytes(),
                 cfrag_i.id.as_bytes(),
                 pk_a.point.compress().as_bytes(),
@@ -166,7 +164,7 @@ impl Keypair {
                 cfrag_i.pi.U_1.compress().as_bytes(),
                 cfrag_i.pk_x.point.compress().as_bytes()
             ]);
-            if *e_v != *cfrag_i.pi.z_1 {
+            if e_v != cfrag_i.pi.z_1 {
                 return Err(Error::Signature)
             }
 
@@ -184,13 +182,13 @@ impl Keypair {
             ]);
 
             // 4.2 (3)
-            if (*cap.E * *cfrag_i.pi.p) != (*cfrag_i.pi.E_2 + *cfrag_i.E_1 * *h) {
+            if cap.E * cfrag_i.pi.p != cfrag_i.pi.E_2 + cfrag_i.E_1 * h {
                 return Err(Error::Proof)
             }
-            if (*cap.V * *cfrag_i.pi.p) != (*cfrag_i.pi.V_2 + *cfrag_i.V_1 * *h) {
+            if cap.V * cfrag_i.pi.p != cfrag_i.pi.V_2 + cfrag_i.V_1 * h {
                 return Err(Error::Proof)
             }
-            if (&*U * &*cfrag_i.pi.p) != (*cfrag_i.pi.U_2 + *cfrag_i.pi.U_1 * *h) {
+            if &*U * &cfrag_i.pi.p != cfrag_i.pi.U_2 + cfrag_i.pi.U_1 * h {
                 return Err(Error::Proof)
             }
         }
@@ -199,7 +197,7 @@ impl Keypair {
         let D = hash(&[
             pk_a.point.compress().as_bytes(),
             self.public.point.compress().as_bytes(),
-            (*pk_a.point * *self.secret.scalar).compress().as_bytes()
+            (pk_a.point * self.secret.scalar).compress().as_bytes()
         ]);
 
         // 3.2.4 (2):
@@ -217,10 +215,10 @@ impl Keypair {
                         if i == j {
                             (n, d)
                         } else {
-                            (Scalar(*n * **sx_j), Scalar(*d * (**sx_j - **sx_i)))
+                            (n * *sx_j, d * (*sx_j - *sx_i))
                         }
                     });
-                nd.push((*cfrags[i].E_1 * *n + *cfrags[i].V_1 * *n, d.invert()));
+                nd.push((cfrags[i].E_1 * n + cfrags[i].V_1 * n, d.invert()));
                 nd
             });
         let numers = nd.iter().map(|nd| nd.0);
@@ -233,12 +231,12 @@ impl Keypair {
             hash(&[
                 cfrag.pk_x.point.compress().as_bytes(),
                 self.public.point.compress().as_bytes(),
-                (*cfrag.pk_x.point * *self.secret.scalar).compress().as_bytes()
+                (cfrag.pk_x.point * self.secret.scalar).compress().as_bytes()
             ])
         };
 
         // 3.2.4 (5):
-        Ok(kdf((point * *d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
+        Ok(kdf((point * d).compress().as_bytes())) // cf. 2.1 and RFC 6090 (App. E)
     }
 
     /// Decrypt ciphertext encrypted with public key `pk_a` and the given nonce.
@@ -281,7 +279,7 @@ impl SecretKey {
         if !cap.check() {
             return Err(Error::InvalidCapsule)
         }
-        Ok(kdf(((*cap.E + *cap.V) * *self.scalar).compress().as_bytes()))
+        Ok(kdf(((cap.E + cap.V) * self.scalar).compress().as_bytes()))
     }
 
     /// Decrypt a message encrypted with the public key corresponding to this secret key.
@@ -297,7 +295,7 @@ impl SecretKey {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PublicKey {
-    point: Point
+    point: RistrettoPoint
 }
 
 impl PublicKey {
@@ -313,9 +311,9 @@ impl PublicKey {
         let u = Scalar::random(rng);
         let E = &g * &r;
         let V = &g * &u;
-        let s = *u + *r * *hash(&[E.compress().as_bytes(), V.compress().as_bytes()]);
-        let k = kdf((*self.point * (*r + *u)).compress().as_bytes());
-        let c = Capsule { E: Point(E), V: Point(V), s: Scalar(s) };
+        let s = u + r * hash(&[E.compress().as_bytes(), V.compress().as_bytes()]);
+        let k = kdf((self.point * (r + u)).compress().as_bytes());
+        let c = Capsule { E, V, s };
         (k, c)
     }
 
@@ -348,7 +346,7 @@ pub struct KeyFragment {
     id: Scalar,
     rk: Scalar,
     pk_x: PublicKey,
-    U_1: Point,
+    U_1: RistrettoPoint,
     z_1: Scalar,
     z_2: Scalar
 }
@@ -362,8 +360,8 @@ impl KeyFragment {
         if !cap.check() {
             return Err(Error::InvalidCapsule)
         }
-        let E_1 = *cap.E * *self.rk;
-        let V_1 = *cap.V * *self.rk;
+        let E_1 = cap.E * self.rk;
+        let V_1 = cap.V * self.rk;
 
         let rng = &mut thread_rng();
 
@@ -373,9 +371,9 @@ impl KeyFragment {
         let t = Scalar::random(rng);
 
         // 4.1 (2)
-        let E_2 = *cap.E * *t;
-        let V_2 = *cap.V * *t;
-        let U_2 = &*U * &*t;
+        let E_2 = cap.E * t;
+        let V_2 = cap.V * t;
+        let U_2 = &*U * &t;
 
         // 4.1 (3)
         let h = hash(&[
@@ -391,21 +389,21 @@ impl KeyFragment {
         ]);
 
         // 4.1 (4)
-        let p = *t + *h * *self.rk;
+        let p = t + h * self.rk;
 
         Ok(CapsuleFragment {
-            E_1: Point(E_1),
-            V_1: Point(V_1),
+            E_1,
+            V_1,
             id: self.id,
             pk_x: self.pk_x.clone(),
             pi: Proof {
-                E_2: Point(E_2),
-                V_2: Point(V_2),
-                U_2: Point(U_2),
-                U_1: self.U_1.clone(),
+                E_2,
+                V_2,
+                U_2,
+                U_1: self.U_1,
                 z_1: self.z_1,
                 z_2: self.z_2,
-                p: Scalar(p)
+                p
             }
         })
     }
@@ -414,7 +412,6 @@ impl KeyFragment {
 
 #[cfg(test)]
 mod attacks {
-    use curve25519_dalek;
     use super::*;
 
     // Bob and the proxy team up to recover Alice's secret key.
@@ -430,12 +427,12 @@ mod attacks {
             hash(&[
                 kfrag.pk_x.point.compress().as_bytes(),
                 bob.public.point.compress().as_bytes(),
-                (*kfrag.pk_x.point * *bob.secret.scalar).compress().as_bytes()
+                (kfrag.pk_x.point * bob.secret.scalar).compress().as_bytes()
             ])
         };
 
         // The collusion: The proxy gave Bob its key fragment. Now Bob can recover Alice's secret:
-        let a = *kfrag.rk * *d;
+        let a = kfrag.rk * d;
         assert_eq!(a.as_bytes(), alice.secret().scalar.as_bytes());
 
         Ok(())
@@ -459,14 +456,14 @@ mod attacks {
             hash(&[
                 pk_x.point.compress().as_bytes(),
                 bob.public.point.compress().as_bytes(),
-                (*pk_x.point * *bob.secret.scalar).compress().as_bytes()
+                (pk_x.point * bob.secret.scalar).compress().as_bytes()
             ])
         };
 
         let D = hash(&[
             alice.public().point.compress().as_bytes(),
             bob.public().point.compress().as_bytes(),
-            (*alice.public().point * *bob.secret().scalar).compress().as_bytes()
+            (alice.public().point * bob.secret().scalar).compress().as_bytes()
         ]);
 
         // Bob recomputes the xs of the polynomial
@@ -487,18 +484,18 @@ mod attacks {
                     if i == j {
                         return (n, d)
                     }
-                    (Scalar(*n * **s), Scalar(*d * (**s - *S[i])))
+                    (n * *s, d * (*s - S[i]))
                 });
-            numer.push(*kfrags[i].rk * *n);
+            numer.push(kfrags[i].rk * n);
             denum.push(d.invert());
         }
-        let mut rk = Scalar(curve25519_dalek::scalar::Scalar::zero());
+        let mut rk = Scalar::zero();
         for (n, d) in numer.iter().zip(denum.iter()) {
-            rk = Scalar(*rk + *n * *d)
+            rk += n * d
         }
 
         // Finally, Bob is able to recover Alice's secret:
-        let a = *rk * *d;
+        let a = rk * d;
         assert_eq!(a.as_bytes(), alice.secret().scalar.as_bytes());
 
         Ok(())

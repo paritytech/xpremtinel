@@ -103,8 +103,6 @@ mod capsule;
 mod error;
 mod key;
 mod keypair;
-mod point;
-mod scalar;
 mod util;
 
 use curve25519_dalek::{constants, ristretto::{CompressedRistretto, RistrettoBasepointTable}};

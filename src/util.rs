@@ -1,8 +1,8 @@
+use curve25519_dalek::scalar::Scalar;
 use blake2;
 use blake2b_simd::Params;
 use hkdf;
 use key::Key;
-use scalar::Scalar;
 
 
 // 5.2
