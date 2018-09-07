@@ -1,7 +1,9 @@
 [package]
-name = "pre"
+name = "xpremtinel"
 version = "0.1.0"
-authors = ["Toralf Wittner <tw@dtex.org>"]
+authors = ["Parity Technologies <admin@parity.io>"]
+license = "Apache-2.0 OR MIT"
+readme = "README.md"
 
 [dependencies]
 bincode = "1.0"
